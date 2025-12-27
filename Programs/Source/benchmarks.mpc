@@ -1,0 +1,200 @@
+# MP-SPDZ Multi-Operation Benchmark
+# Supports: sum, count, relu, billionaire operations
+# Usage: ./compile.py benchmark_ops <operation> <vector_size> [repetitions]
+# Example: ./compile.py benchmark_ops sum 512 1
+
+def parse_args():
+    """Parse command line arguments"""
+    if len(program.args) < 3:
+        print_ln("Usage: compile.py %s <operation> <vector_size> [repetitions]", program.args[0])
+        print_ln("Operations: sum, count, relu, billionaire")
+        print_ln("Vector sizes: 32, 512, 8192, 16384")
+        print_ln("Example: compile.py %s sum 512 1", program.args[0])
+        crash()
+    
+    operation = program.args[1]
+    vector_size = int(program.args[2])
+    repetitions = int(program.args[3]) if len(program.args) > 3 else 1
+    
+    return operation, vector_size, repetitions
+
+
+
+def sum_benchmark(vector_size, repetitions):
+    """Sum reduction across two N-element vectors (one per party)."""
+    print_ln("=== Sum Benchmark ===")
+    @for_range(repetitions)
+    def rep_loop(rep):
+        print_ln("--- Repetition %s ---", rep + 1)
+
+        # secret-input vectors
+        p0_vec = Array(vector_size, sint)
+        p1_vec = Array(vector_size, sint)
+
+        @for_range_opt(vector_size)
+        def _p0(i):
+            p0_vec[i] = sint.get_input_from(0)
+
+        @for_range_opt(vector_size)
+        def _p1(i):
+            p1_vec[i] = sint.get_input_from(1)
+
+        total = sint(0)
+        @for_range_opt(vector_size)
+        def _sum(i):
+            total.update(total + p0_vec[i] + p1_vec[i])
+
+        print_ln("Total: %s", total.reveal())
+
+
+def count_benchmark(vector_size, repetitions, threshold=0):
+    """
+    Count how many inputs are larger than a public threshold.
+    Both parties provide an N-element vector; results are revealed.
+    """
+    print_ln("=== Count Benchmark (threshold = %s) ===", threshold)
+    thr = sint(threshold)        # promote to secret for comparison
+
+    @for_range(repetitions)
+    def rep_loop(rep):
+        print_ln("--- Repetition %s ---", rep + 1)
+
+        p0_vec = Array(vector_size, sint)
+        p1_vec = Array(vector_size, sint)
+
+        @for_range_opt(vector_size)
+        def _p0(i):
+            p0_vec[i] = sint.get_input_from(0)
+
+        @for_range_opt(vector_size)
+        def _p1(i):
+            p1_vec[i] = sint.get_input_from(1)
+
+        cnt = sint(0)
+        @for_range_opt(vector_size)
+        def _cnt(i):
+            gt0  = (p0_vec[i] > thr)
+            gt1  = (p1_vec[i] > thr)
+            cnt.update(cnt + gt0 + gt1)
+
+        print_ln("Count (> %s): %s", threshold, cnt.reveal())
+
+
+def relu_benchmark(vector_size, repetitions):
+    """Element-wise ReLU: max(0, x) on each secret input."""
+    print_ln("=== ReLU Benchmark ===")
+
+    @for_range(repetitions)
+    def rep_loop(rep):
+        print_ln("--- Repetition %s ---", rep + 1)
+
+        p0_in = Array(vector_size, sint)
+        p1_in = Array(vector_size, sint)
+        p0_out = Array(vector_size, sint)
+        p1_out = Array(vector_size, sint)
+
+        @for_range_opt(vector_size)
+        def _read(i):
+            p0_in[i] = sint.get_input_from(0)
+            p1_in[i] = sint.get_input_from(1)
+
+        @for_range_opt(vector_size)
+        def _relu(i):
+            p0_out[i] = (p0_in[i] >= 0).if_else(p0_in[i], sint(0))
+            p1_out[i] = (p1_in[i] >= 0).if_else(p1_in[i], sint(0))
+
+        # reveal first few results for sanity-check
+        @for_range(min(4, vector_size))
+        def _print(i):
+            print_ln("Party-0 ReLU[%s] = %s", i, p0_out[i].reveal())
+            print_ln("Party-1 ReLU[%s] = %s", i, p1_out[i].reveal())
+
+
+def billionaire_benchmark(vector_size, repetitions):
+    """
+    ‘Billionaire’ comparison: for each record i, decide whether
+    Alice (P0) is richer than Bob (P1) while hiding individual
+    asset values.
+
+    Each party supplies three uint8_t fields per record:
+      cash, property, stock.
+    Output is a secret bit array is_alice_richer[i].
+    """
+    print_ln("=== Billionaire Benchmark ===")
+
+    @for_range(repetitions)
+    def rep_loop(rep):
+        print_ln("--- Repetition %s ---", rep + 1)
+
+        # allocate secret arrays for the three asset classes
+        a_cash = Array(vector_size, sint)
+        a_prop = Array(vector_size, sint)
+        a_stock = Array(vector_size, sint)
+
+        b_cash = Array(vector_size, sint)
+        b_prop = Array(vector_size, sint)
+        b_stock = Array(vector_size, sint)
+
+        # read inputs from the two parties
+        @for_range_opt(vector_size)
+        def _read_a(i):
+            a_cash[i]  = sint.get_input_from(0)
+            a_prop[i]  = sint.get_input_from(0)
+            a_stock[i] = sint.get_input_from(0)
+
+        @for_range_opt(vector_size)
+        def _read_b(i):
+            b_cash[i]  = sint.get_input_from(1)
+            b_prop[i]  = sint.get_input_from(1)
+            b_stock[i] = sint.get_input_from(1)
+
+        richer = Array(vector_size, sint)  # boolean outputs
+
+        @for_range_opt(vector_size)
+        def _cmp(i):
+            alice_total = a_cash[i] + a_prop[i] + a_stock[i]
+            bob_total   = b_cash[i] + b_prop[i] + b_stock[i]
+            richer[i]   = (alice_total > bob_total)
+
+        # reveal and branch on each record's comparison
+        @for_range(min(8, vector_size))
+        def _print(i):
+            is_alice_richer = richer[i].reveal()
+            print_ln("Record %s :", i)
+
+            @if_e(is_alice_richer)
+            def _():
+                print_ln("Alice is richer.")
+            @else_
+            def _():
+                print_ln("Bob is richer.")
+
+
+ 
+def main():
+    """Main benchmark function"""
+    operation, vector_size, repetitions = parse_args()
+    
+    print_ln("=== MP-SPDZ Multi-Operation Benchmark ===")
+    print_ln("Operation: %s", operation)
+    print_ln("Vector size: %s", vector_size)
+    print_ln("Repetitions: %s", repetitions)
+    print_ln("==========================================")
+    
+    if operation == "sum":
+        sum_benchmark(vector_size, repetitions)
+    elif operation == "count":
+        count_benchmark(vector_size, repetitions)
+    elif operation == "relu":
+        relu_benchmark(vector_size, repetitions)
+    elif operation == "billionaire":
+        billionaire_benchmark(vector_size, repetitions)
+    else:
+        print_ln("Invalid operation: %s", operation)
+        print_ln("Valid operations: sum, count, relu, billionaire")
+        crash()
+    
+    print_ln("=== Benchmark Complete ===")
+
+# Execute main function
+main()
