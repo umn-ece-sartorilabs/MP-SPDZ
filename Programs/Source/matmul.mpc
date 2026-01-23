@@ -1,0 +1,35 @@
+# MatMul Benchmark for MP-SPDZ
+# Standardized Kernel for Neural Network Training (Dense Layer)
+# Using `sfix` (Secret Fixed Point)
+# Manual implementation to avoid potential library operator issues.
+
+program.use_trunc_pr = True
+
+N = 16
+
+A = sfix.Matrix(N, N)
+B = sfix.Matrix(N, N)
+C = sfix.Matrix(N, N)
+
+# Init inputs
+@for_range(N)
+def _(i):
+    @for_range(N)
+    def _(j):
+        A[i][j] = sfix(1.5)
+        B[i][j] = sfix(2.5)
+
+# Manual Matrix Multiplication O(N^3)
+@for_range(N)
+def _(i):
+    @for_range(N)
+    def _(j):
+        val = MemValue(sfix(0))
+        @for_range(N)
+        def _(k):
+            # Accumulate dot product
+            val.write(val.read() + A[i][k] * B[k][j])
+        C[i][j] = val.read()
+
+print_ln("MatMul sfix manual (16x16) complete.")
+print_ln("Sample C[0][0]: %s", C[0][0].reveal())
