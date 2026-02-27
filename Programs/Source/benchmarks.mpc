@@ -7,8 +7,8 @@ def parse_args():
     """Parse command line arguments"""
     if len(program.args) < 3:
         print_ln("Usage: compile.py %s <operation> <vector_size> [repetitions]", program.args[0])
-        print_ln("Operations: sum, count, relu, billionaire")
-        print_ln("Vector sizes: 32, 512, 8192, 16384")
+        print_ln("Operations: sum, count, relu, billionaire, matmul, conv2d")
+        print_ln("Vector sizes: 32, 512, 8192, 16384 (or matrix dim for matmul/conv2d)")
         print_ln("Example: compile.py %s sum 512 1", program.args[0])
         crash()
     
@@ -170,6 +170,88 @@ def billionaire_benchmark(vector_size, repetitions):
                 print_ln("Bob is richer.")
 
 
+def matmul_benchmark(dim, repetitions):
+    """Matrix Multiplication: A[dim x dim] * B[dim x dim] = C[dim x dim]"""
+    print_ln("=== MatMul Benchmark (dim=%s) ===", dim)
+    
+    program.use_trunc_pr = True
+    
+    @for_range(repetitions)
+    def rep_loop(rep):
+        print_ln("--- Repetition %s ---", rep + 1)
+        
+        A = sfix.Matrix(dim, dim)
+        B = sfix.Matrix(dim, dim)
+        C = sfix.Matrix(dim, dim)
+        
+        # Initialize with fixed values (1.5, 2.5)
+        @for_range(dim)
+        def _(i):
+            @for_range(dim)
+            def _(j):
+                A[i][j] = sfix(1.5)
+                B[i][j] = sfix(2.5)
+        
+        # Manual O(N^3) Matrix Multiplication
+        @for_range(dim)
+        def _(i):
+            @for_range(dim)
+            def _(j):
+                val = MemValue(sfix(0))
+                @for_range(dim)
+                def _(k):
+                    val.write(val.read() + A[i][k] * B[k][j])
+                C[i][j] = val.read()
+        
+        print_ln("Sample C[0][0]: %s", C[0][0].reveal())
+
+
+def conv2d_benchmark(dim, repetitions):
+    """2D Convolution: Image[dim x dim] * Kernel[3x3] = Output[(dim-2) x (dim-2)]"""
+    print_ln("=== Conv2D Benchmark (dim=%s, kernel=3x3) ===", dim)
+    
+    program.use_trunc_pr = True
+    K = 3  # Kernel size
+    OUT_DIM = dim - K + 1
+    
+    @for_range(repetitions)
+    def rep_loop(rep):
+        print_ln("--- Repetition %s ---", rep + 1)
+        
+        Image = sint.Matrix(dim, dim)
+        Kernel = sint.Matrix(K, K)
+        Output = sint.Matrix(OUT_DIM, OUT_DIM)
+        
+        # Load Image from Party 0
+        @for_range(dim)
+        def _(i):
+            @for_range(dim)
+            def _(j):
+                Image[i][j] = sint.get_input_from(0)
+        
+        # Load Kernel from Party 1
+        @for_range(K)
+        def _(i):
+            @for_range(K)
+            def _(j):
+                Kernel[i][j] = sint.get_input_from(1)
+        
+        # Convolution
+        @for_range(OUT_DIM)
+        def _(i):
+            @for_range(OUT_DIM)
+            def _(j):
+                val = MemValue(sint(0))
+                @for_range(K)
+                def _(di):
+                    @for_range(K)
+                    def _(dj):
+                        val.write(val.read() + Image[i+di][j+dj] * Kernel[di][dj])
+                Output[i][j] = val.read()
+        
+        print_ln("Sample Output[0][0]: %s", Output[0][0].reveal())
+
+
  
 def main():
     """Main benchmark function"""
@@ -189,9 +271,13 @@ def main():
         relu_benchmark(vector_size, repetitions)
     elif operation == "billionaire":
         billionaire_benchmark(vector_size, repetitions)
+    elif operation == "matmul":
+        matmul_benchmark(vector_size, repetitions)
+    elif operation == "conv2d":
+        conv2d_benchmark(vector_size, repetitions)
     else:
         print_ln("Invalid operation: %s", operation)
-        print_ln("Valid operations: sum, count, relu, billionaire")
+        print_ln("Valid operations: sum, count, relu, billionaire, matmul, conv2d")
         crash()
     
     print_ln("=== Benchmark Complete ===")

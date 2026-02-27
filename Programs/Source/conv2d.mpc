@@ -1,0 +1,45 @@
+# Simple Conv2D Benchmark for MP-SPDZ
+# Input: 32x32 Image, Kernel: 3x3
+# Output: (32-3+1)x(32-3+1) = 30x30
+
+program.use_trunc_pr = True
+
+N = 16 # Image Width/Height
+K = 3  # Kernel Size
+OUT_DIM = N - K + 1
+
+# Inputs
+Image = sint.Matrix(N, N)
+Kernel = sint.Matrix(K, K)
+Output = sint.Matrix(OUT_DIM, OUT_DIM)
+
+# Load Inputs
+@for_range(N)
+def _(i):
+    @for_range(N)
+    def _(j):
+        Image[i][j] = sint.get_input_from(0)
+
+@for_range(K)
+def _(i):
+    @for_range(K)
+    def _(j):
+        Kernel[i][j] = sint.get_input_from(1)
+
+# Convolution
+@for_range(OUT_DIM)
+def _(i):
+    @for_range(OUT_DIM)
+    def _(j):
+        # Dot product of kernel and image patch
+        # Use MemValue for accumulation inside nested loops
+        val = MemValue(sint(0))
+        @for_range(K)
+        def _(di):
+            @for_range(K)
+            def _(dj):
+                val.write(val.read() + Image[i+di][j+dj] * Kernel[di][dj])
+        Output[i][j] = val.read()
+
+print_ln("Conv2D (32x32, 3x3) complete.")
+print_ln("Sample Output[0][0]: %s", Output[0][0].reveal())
